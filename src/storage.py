@@ -214,7 +214,7 @@ class Storage(object):
             self.last_hash = GENESIS_HASH
             self.pruning_limit = config.getint('leveldb', 'pruning_limit')
             db_version = DB_VERSION
-            self.put_node('', Node.from_dict({}))
+            self.put_node(b'', Node.from_dict({}))
         # check version
         if db_version != DB_VERSION:
             print_log("Your database '%s' is deprecated. Please create a new database"%self.dbpath)
@@ -225,10 +225,10 @@ class Storage(object):
             self.pruning_limit = ast.literal_eval(self.db_undo.get('limit'))
         except:
             self.pruning_limit = config.getint('leveldb', 'pruning_limit')
-            self.db_undo.put('version', repr(self.pruning_limit))
+            self.db_undo.put(b'version', repr(self.pruning_limit).encode("utf-8"))
         # compute root hash
-        root_node = self.get_node('')
-        self.root_hash, coins = root_node.get_hash('', None)
+        root_node = self.get_node(b'')
+        self.root_hash, coins = root_node.get_hash(b'', None)
         # print stuff
         print_log("Database version %d."%db_version)
         print_log("Pruning limit for spent outputs is %d."%self.pruning_limit)
@@ -321,7 +321,7 @@ class Storage(object):
         return self.db_addr.get(txi)
 
     def get_undo_info(self, height):
-        s = self.db_undo.get("undo_info_%d" % (height % 100))
+        s = self.db_undo.get(b"undo_info_%d" % (height % 100))
         if s is None:
             print_log("no undo info for ", height)
         return eval(s)
@@ -329,7 +329,7 @@ class Storage(object):
 
     def write_undo_info(self, height, bitcoind_height, undo_info):
         if height > bitcoind_height - 100 or self.test_reorgs:
-            self.db_undo.put("undo_info_%d" % (height % 100), repr(undo_info))
+            self.db_undo.put(b"undo_info_%d" % (height % 100), repr(undo_info).encode("utf-8"))
 
     @staticmethod
     def common_prefix(word1, word2):
@@ -566,7 +566,7 @@ class Storage(object):
             db.close()
 
     def save_height(self, block_hash, block_height):
-        self.db_undo.put('height', repr((block_hash, block_height, DB_VERSION)))
+        self.db_undo.put(b'height', repr((block_hash, block_height, DB_VERSION)).encode("utf-8"))
 
     def add_to_history(self, addr, tx_hash, tx_pos, value, tx_height):
         key = self.address_to_key(addr)
