@@ -69,7 +69,7 @@ class Node(object):
     def get_singleton(self):
         for i in range(256):
             if self.k == (1<<i):
-                return chr(i)
+                return bytes((i,))
         raise BaseException("get_singleton")
 
     def indexof(self, c):
@@ -131,9 +131,9 @@ class Node(object):
         k = 0
         s = b''
         for i in range(256):
-            if chr(i) in d:
+            if i in d:
                 k += 1<<i
-                h, value = d[chr(i)]
+                h, value = d[i]
                 if h is None: h = b'\x00'*32
                 vv = int_to_bytes8(value)
                 item = h + vv
@@ -360,7 +360,7 @@ class Storage(object):
         parent = path[-1]
         parent_node = self.get_node(parent)
         n = len(parent)
-        c = target[n]
+        c = target[n:n+1]
         if parent_node.has(c):
             h, v = parent_node.get(c)
             skip = self.get_skip(parent + c)
@@ -383,8 +383,8 @@ class Storage(object):
                     target[index]: (None, 0),
                     child[index]: (h, v)
                     })
-            self.set_skip(prefix + target[index], target[index+1:])
-            self.set_skip(prefix + child[index], child[index+1:])
+            self.set_skip(prefix + target[index:index+1], target[index+1:])
+            self.set_skip(prefix + child[index:index+1], child[index+1:])
             self.put_node(prefix, d)
             path.append(prefix)
             self.parents[child] = prefix
@@ -428,14 +428,14 @@ class Storage(object):
 
                 node_hash, node_value = self.hash_list.pop(node)
 
-                parent = self.parents[node] if node!='' else ''
+                parent = self.parents[node] if node != b'' else b''
 
                 if i != KEYLENGTH and node_hash is None:
                     n = self.get_node(node)
                     node_hash, node_value = n.get_hash(node, parent)
                 assert node_hash is not None
 
-                if node == '':
+                if node == b'':
                     self.root_hash = node_hash
                     self.root_value = node_value
                     assert self.root_hash is not None
@@ -448,12 +448,12 @@ class Storage(object):
                     assert d is not None
 
                 # write value into parent
-                letter = node[len(parent)]
+                letter = node[len(parent):len(parent)+1]
                 d.set(letter, node_hash, node_value)
                 nodes[parent] = d
 
                 # iterate
-                grandparent = self.parents[parent] if parent != '' else None
+                grandparent = self.parents[parent] if parent != b'' else None
                 parent_hash, parent_value = d.get_hash(parent, grandparent)
                 if parent_hash is not None:
                     self.hash_list[parent] = (parent_hash, parent_value)
@@ -481,7 +481,7 @@ class Storage(object):
             return True
 
         remaining = target
-        key = ''
+        key = b''
         path = []
         while key != target:
             node = self.get_node(key)
@@ -489,7 +489,7 @@ class Storage(object):
                 break
                 #raise # should never happen
             path.append(key)
-            c = remaining[0]
+            c = remaining[0:1]
             if not node.has(c):
                 break
             skip = self.get_skip(key + c)
@@ -511,7 +511,7 @@ class Storage(object):
             del self.hash_list[leaf]
 
         parent = path[-1]
-        letter = leaf[len(parent)]
+        letter = leaf[len(parent):len(parent)+1]
         parent_node = self.get_node(parent)
         parent_node.remove(letter)
 
@@ -529,7 +529,7 @@ class Storage(object):
             # update skip value in grand-parent
             gp = path[-2]
             gp_items = self.get_node(gp)
-            letter = otherleaf[len(gp)]
+            letter = otherleaf[len(gp):len(gp)+1]
             new_skip = otherleaf[len(gp)+1:]
             gp_items.set(letter, None, 0)
             self.set_skip(gp+ letter, new_skip)
@@ -605,7 +605,7 @@ class Storage(object):
         self.db_addr.delete(txi)
         # add to history
         s = self.db_hist.get(addr)
-        if s is None: s = ''
+        if s is None: s = b''
         txo = unhexlify(txid + int_to_hex4(index) + int_to_hex4(height))
         s += txi + int_to_bytes4(in_height) + txo
         s = s[ -80*self.pruning_limit:]
