@@ -27,6 +27,7 @@ import time
 import hashlib
 import struct
 from binascii import hexlify, unhexlify
+from codecs import getreader
 from collections import deque
 from itertools import repeat
 
@@ -98,6 +99,8 @@ def header_from_string(s):
         'nonce': bytes4_to_int(s[76:80]),
     }
 
+
+utf8_reader = getreader("utf-8")
 
 ############ functions from pywallet #####################
 

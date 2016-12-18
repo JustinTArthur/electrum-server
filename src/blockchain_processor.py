@@ -21,6 +21,7 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from binascii import hexlify, unhexlify
 import hashlib
 from json import dumps, load
 import os
@@ -35,7 +36,7 @@ from . import deserialize
 from .processor import Processor, print_log
 from .storage import Storage
 from .utils import logger, hash_decode, hash_encode, Hash, header_from_string, header_to_string, ProfiledThread, \
-    rev_hex, int_to_hex4
+    rev_hex, int_to_hex4, utf8_reader
 
 class BlockchainProcessor(Processor):
 
@@ -60,7 +61,7 @@ class BlockchainProcessor(Processor):
         self.max_cache_size = 100000
         self.chunk_cache = {}
         self.cache_lock = threading.Lock()
-        self.headers_data = ''
+        self.headers_data = b''
         self.headers_path = config.get('leveldb', 'path')
 
         self.mempool_values = {}
@@ -77,12 +78,19 @@ class BlockchainProcessor(Processor):
             self.test_reorgs = False
         self.storage = Storage(config, shared, self.test_reorgs)
 
-        self.bitcoind_url = 'http://%s:%s@%s:%s/' % (
-            config.get('bitcoind', 'bitcoind_user'),
-            config.get('bitcoind', 'bitcoind_password'),
+        self.bitcoind_url = 'http://%s:%s/' % (
             config.get('bitcoind', 'bitcoind_host'),
             config.get('bitcoind', 'bitcoind_port'))
 
+        bitcoind_passwd_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        bitcoind_passwd_mgr.add_password(
+            None,
+            self.bitcoind_url,
+            config.get('bitcoind', 'bitcoind_user'),
+            config.get('bitcoind', 'bitcoind_password')
+        )
+        bitcoind_auth_handler = urllib.request.HTTPBasicAuthHandler(bitcoind_passwd_mgr)
+        self.bitcoind_opener = urllib.request.build_opener(bitcoind_auth_handler)
         self.sent_height = 0
         self.sent_header = None
 
@@ -100,7 +108,7 @@ class BlockchainProcessor(Processor):
 
     def do_catch_up(self):
         self.header = self.block2header(self.bitcoind('getblock', (self.storage.last_hash,)))
-        self.header['utxo_root'] = self.storage.get_root_hash().encode('hex')
+        self.header['utxo_root'] = hexlify(self.storage.get_root_hash())
         self.catch_up(sync=False)
         if not self.shared.stopped():
             print_log("Blockchain is up to date.")
@@ -130,7 +138,7 @@ class BlockchainProcessor(Processor):
         if self.storage.height%100 == 0 \
             or (self.storage.height%10 == 0 and self.storage.height >= 100000)\
             or self.storage.height >= 200000:
-            msg = "block %d (%d %.2fs) %s" %(self.storage.height, num_tx, delta, self.storage.get_root_hash().encode('hex'))
+            msg = "block %d (%d %.2fs) %s" %(self.storage.height, num_tx, delta, hexlify(self.storage.get_root_hash()))
             msg += " (%.2ftx/s, %.2fs/block)" % (tx_per_second, seconds_per_block)
             run_blocks = self.storage.height - self.start_catchup_height
             remaining_blocks = self.bitcoind_height - self.storage.height
@@ -154,8 +162,8 @@ class BlockchainProcessor(Processor):
         postdata = dumps({"method": method, 'params': params, 'id': 'jsonrpc'})
         while True:
             try:
-                response = urllib.request.urlopen(self.bitcoind_url, postdata)
-                r = load(response)
+                response = self.bitcoind_opener.open(self.bitcoind_url, postdata.encode("utf-8"))
+                r = load(utf8_reader(response))
                 response.close()
             except:
                 print_log("cannot reach bitcoind...")
@@ -191,7 +199,7 @@ class BlockchainProcessor(Processor):
         self.headers_filename = os.path.join(self.headers_path, 'blockchain_headers')
 
         if os.path.exists(self.headers_filename):
-            height = os.path.getsize(self.headers_filename)/80 - 1   # the current height
+            height = os.path.getsize(self.headers_filename)//80 - 1   # the current height
             if height > 0:
                 prev_hash = self.hash_header(self.read_header(height))
             else:
@@ -229,7 +237,7 @@ class BlockchainProcessor(Processor):
 
     @staticmethod
     def hash_header(header):
-        return rev_hex(Hash(header_to_string(header).decode('hex')).encode('hex'))
+        return rev_hex(hexlify(Hash(unhexlify(header_to_string(header)))))
 
     def read_header(self, block_height):
         if os.path.exists(self.headers_filename):
@@ -244,13 +252,13 @@ class BlockchainProcessor(Processor):
         with open(self.headers_filename, 'rb') as f:
             f.seek(index*2016*80)
             chunk = f.read(2016*80)
-        return chunk.encode('hex')
+        return hexlify(chunk)
 
     def write_header(self, header, sync=True):
         if not self.headers_data:
             self.headers_offset = header.get('block_height')
 
-        self.headers_data += header_to_string(header).decode('hex')
+        self.headers_data += unhexlify(header_to_string(header))
         if sync or len(self.headers_data) > 40*100:
             self.flush_headers()
 
@@ -270,7 +278,7 @@ class BlockchainProcessor(Processor):
         with open(self.headers_filename, 'rb+') as f:
             f.seek(self.headers_offset*80)
             f.write(self.headers_data)
-        self.headers_data = ''
+        self.headers_data = b''
 
     def get_chunk(self, i):
         # store them on disk; store the current chunk in memory
@@ -290,13 +298,12 @@ class BlockchainProcessor(Processor):
             return None
 
         vds = deserialize.BCDataStream()
-        vds.write(raw_tx.decode('hex'))
+        vds.write(unhexlify(raw_tx))
         try:
             return deserialize.parse_Transaction(vds, is_coinbase=False)
         except:
             print_log("ERROR: cannot parse", txid)
             return None
-
 
     def get_history(self, addr, cache_only=False):
         with self.cache_lock:
@@ -345,7 +352,7 @@ class BlockchainProcessor(Processor):
         if tx_points == ['*']:
             return '*'
         status = ''.join(tx.get('tx_hash') + ':%d:' % tx.get('height') for tx in tx_points)
-        return hashlib.sha256(status).digest().encode('hex')
+        return hexlify(hashlib.sha256(status).digest())
 
     def get_merkle(self, tx_hash, height, cache_only):
         with self.cache_lock:
@@ -394,9 +401,9 @@ class BlockchainProcessor(Processor):
         txdict = {}     # deserialized tx
         is_coinbase = True
         for raw_tx in txlist:
-            tx_hash = hash_encode(Hash(raw_tx.decode('hex')))
+            tx_hash = hash_encode(Hash(unhexlify(raw_tx)))
             vds = deserialize.BCDataStream()
-            vds.write(raw_tx.decode('hex'))
+            vds.write(unhexlify(raw_tx))
             try:
                 tx = deserialize.parse_Transaction(vds, is_coinbase)
             except:
@@ -551,7 +558,7 @@ class BlockchainProcessor(Processor):
         elif method == 'blockchain.utxo.get_address':
             txid = str(params[0])
             pos = int(params[1])
-            txi = (txid + int_to_hex4(pos)).decode('hex')
+            txi = unhexlify(txid + int_to_hex4(pos))
             result = self.storage.get_address(txi)
 
         elif method == 'blockchain.block.get_header':
@@ -626,8 +633,8 @@ class BlockchainProcessor(Processor):
 
         while True:
             try:
-                response = urllib.request.urlopen(self.bitcoind_url, postdata)
-                r = load(response)
+                response = self.bitcoind_opener.open(self.bitcoind_url, postdata.encode("utf-8"))
+                r = load(utf8_reader(response))
                 response.close()
             except:
                 logger.error("bitcoind error (getfullblock)")
@@ -709,7 +716,7 @@ class BlockchainProcessor(Processor):
             self.print_time(n)
 
         self.header = self.block2header(self.bitcoind('getblock', (self.storage.last_hash,)))
-        self.header['utxo_root'] = self.storage.get_root_hash().encode('hex')
+        self.header['utxo_root'] = hexlify(self.storage.get_root_hash())
 
         if self.shared.stopped(): 
             print_log( "closing database" )
@@ -761,7 +768,7 @@ class BlockchainProcessor(Processor):
                 if mpv:
                     addr, value = mpv[ x.get('prevout_n')]
                 else:
-                    txi = (x.get('prevout_hash') + int_to_hex4(x.get('prevout_n'))).decode('hex')
+                    txi = unhexlify(x.get('prevout_hash') + int_to_hex4(x.get('prevout_n')))
                     try:
                         addr = self.storage.get_address(txi)
                         value = self.storage.get_utxo_value(addr,txi)
